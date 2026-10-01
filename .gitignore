@@ -2,3 +2,4 @@ build/
 build-asan/
 *.o
 a.out
+data/

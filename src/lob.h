@@ -123,6 +123,23 @@ int lob_best_ask(const lob_t *book, int64_t *price_ticks_out, uint64_t *qty_out)
 size_t lob_depth(const lob_t *book, lob_side_t side,
                   lob_level_snapshot_t *out, size_t max_levels);
 
+/* Looks up a resting order by id. On LOB_OK, writes its side, price,
+ * and remaining quantity to whichever outputs are non-NULL; returns
+ * LOB_ERR_NOT_FOUND (outputs untouched) if it isn't resting. Read
+ * only, O(1) expected.
+ */
+lob_status_t lob_get_order(const lob_t *book, uint64_t order_id, lob_side_t *side_out,
+                            int64_t *price_ticks_out, uint32_t *qty_out);
+
+/* Copies the ids of the orders resting at price_ticks on side into
+ * ids_out[], oldest (front of the FIFO) first, writing at most
+ * max_ids. Returns the total number of orders at that level, which
+ * can exceed max_ids; 0 for an empty level or a price outside the
+ * book's window. Read only, O(orders at the level).
+ */
+size_t lob_level_orders(const lob_t *book, lob_side_t side, int64_t price_ticks,
+                         uint64_t *ids_out, size_t max_ids);
+
 #ifdef __cplusplus
 }
 #endif

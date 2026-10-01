@@ -185,6 +185,43 @@ static void test_pool_exhaustion_returns_error_not_crash(void)
     lob_free(book);
 }
 
+static void test_get_order_and_level_orders(void)
+{
+    lob_t *book = lob_new(16, 0, 100);
+    assert(book != NULL);
+
+    uint32_t filled = 0;
+    assert(lob_add_limit(book, 7, LOB_SIDE_SELL, 40, 5, &filled) == LOB_OK);
+    assert(lob_add_limit(book, 8, LOB_SIDE_SELL, 40, 6, &filled) == LOB_OK);
+    assert(lob_add_limit(book, 9, LOB_SIDE_SELL, 40, 7, &filled) == LOB_OK);
+    assert(lob_reduce(book, 8, 2) == LOB_OK);
+
+    lob_side_t side;
+    int64_t price;
+    uint32_t qty;
+    assert(lob_get_order(book, 8, &side, &price, &qty) == LOB_OK);
+    assert(side == LOB_SIDE_SELL && price == 40 && qty == 2);
+    assert(lob_get_order(book, 8, NULL, NULL, NULL) == LOB_OK);
+    assert(lob_get_order(book, 99, &side, &price, &qty) == LOB_ERR_NOT_FOUND);
+
+    /* FIFO order, and the return value counts past max_ids. */
+    uint64_t ids[2];
+    assert(lob_level_orders(book, LOB_SIDE_SELL, 40, ids, 2) == 3);
+    assert(ids[0] == 7 && ids[1] == 8);
+
+    assert(lob_cancel(book, 7) == LOB_OK);
+    assert(lob_level_orders(book, LOB_SIDE_SELL, 40, ids, 2) == 2);
+    assert(ids[0] == 8 && ids[1] == 9);
+
+    /* Empty level, wrong side, and out-of-window prices are all 0. */
+    assert(lob_level_orders(book, LOB_SIDE_BUY, 40, ids, 2) == 0);
+    assert(lob_level_orders(book, LOB_SIDE_SELL, 41, ids, 2) == 0);
+    assert(lob_level_orders(book, LOB_SIDE_SELL, 1000, ids, 2) == 0);
+    assert(lob_level_orders(book, LOB_SIDE_SELL, -1, ids, 2) == 0);
+
+    lob_free(book);
+}
+
 /* --- Naive reference book, used only by the differential test below.
  * Deliberately the dumbest correct implementation: unsorted arrays,
  * linear scans for everything. Its only job is to be obviously
@@ -386,6 +423,7 @@ int main(void)
     test_full_cancel_removes_and_best_updates();
     test_market_order_larger_than_book_reports_unfilled();
     test_pool_exhaustion_returns_error_not_crash();
+    test_get_order_and_level_orders();
     test_differential_against_naive_reference();
 
     printf("all unit tests passed\n");

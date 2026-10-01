@@ -577,3 +577,36 @@ size_t lob_depth(const lob_t *book, lob_side_t side,
 
     return n;
 }
+
+lob_status_t lob_get_order(const lob_t *book, uint64_t order_id, lob_side_t *side_out,
+                            int64_t *price_ticks_out, uint32_t *qty_out)
+{
+    uint32_t idx = hash_lookup(book, order_id);
+    if (idx == LOB_NULL_INDEX)
+        return LOB_ERR_NOT_FOUND;
+
+    const lob_order_t *order = &book->orders[idx];
+    if (side_out)
+        *side_out = (lob_side_t)order->side;
+    if (price_ticks_out)
+        *price_ticks_out = order->price_ticks;
+    if (qty_out)
+        *qty_out = order->qty;
+    return LOB_OK;
+}
+
+size_t lob_level_orders(const lob_t *book, lob_side_t side, int64_t price_ticks,
+                         uint64_t *ids_out, size_t max_ids)
+{
+    if (!price_in_range(book, price_ticks))
+        return 0;
+
+    const lob_level_t *level = level_at_const(book, side, price_ticks);
+    size_t n = 0;
+    for (uint32_t i = level->head; i != LOB_NULL_INDEX; i = book->orders[i].next) {
+        if (n < max_ids)
+            ids_out[n] = book->orders[i].order_id;
+        n++;
+    }
+    return n;
+}
