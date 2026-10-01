@@ -1,0 +1,24 @@
+name: tests
+
+on:
+  push:
+    branches: [main, rebuild]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: make CC=${{ matrix.cc }} test
+
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test with ASan/UBSan
+        run: make asan
