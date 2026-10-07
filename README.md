@@ -5,7 +5,7 @@
 **Status: Scaffold. M1 in progress.**
 
 A limit order book matching engine in C, meant as the fast core that
-[MarketMicrostructure](https://github.com/vincal848/MarketMicrostructure)
+[market-microstructure](https://github.com/vincal848/market-microstructure)
 (a Hawkes-driven LOB simulator with market makers, being scaffolded in
 parallel) can replay LOBSTER message data through.
 
