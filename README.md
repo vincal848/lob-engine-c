@@ -120,6 +120,16 @@ after each line against LOBSTER's paired `orderbook` file.
 - **M4 -- Python binding.** `ctypes`/`cffi` binding so
   MarketMicrostructure can drive this book directly instead of
   reimplementing matching logic in Python.
+- **M5 -- exchange layer.** *Spec only: [`docs/EXCHANGE.md`](docs/EXCHANGE.md).*
+  Many symbols (one book each), accounts with cash and positions and
+  a pre-trade risk check, multi-threaded order entry through lock-free
+  rings into a single sequencer thread, and a fill tape. Done when a
+  journal recorded from a multi-threaded run replays single-threaded
+  into a byte-identical fill tape, under TSan. Built on top of
+  `lob.h` without changing it, and after M2, so it sits on a book
+  that's already been checked against LOBSTER. Inspired by
+  [psakoglou/Exchange-Matching-Engine-Emulation](https://github.com/psakoglou/Exchange-Matching-Engine-Emulation);
+  the spec lists what's borrowed and what's done differently.
 
 ### Benchmark (preliminary, M1)
 
@@ -172,6 +182,7 @@ make clean
 | `bench/bench.c` | Synthetic-flow throughput benchmark, built but not a CI gate. |
 | `tools/` | Placeholder for the M2 LOBSTER replay harness. |
 | `docs/DESIGN.md` | Memory layout diagram and the per-operation complexity table. |
+| `docs/EXCHANGE.md` | M5 spec: the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
 | `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`asan`/`clean`. |
 | `.github/workflows/tests.yml` | gcc/clang matrix plus a separate ASan/UBSan job. |
 
