@@ -2,7 +2,8 @@
 
 [![tests](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml)
 
-**Status: Scaffold. M1 in progress.**
+**Status: Scaffold. M1 core done; M2 replay matches two full LOBSTER
+sample days exactly (see Milestones).**
 
 A limit order book matching engine in C, meant as the fast core that
 [market-microstructure](https://github.com/vincal848/market-microstructure)
@@ -86,24 +87,31 @@ The public API (`src/lob.h`):
 | `lob_execute_market(book, side, qty, &filled_out)` | Walks the opposite side until `qty` is filled or the side is empty; never rests. |
 | `lob_best_bid(book, &price_out, &qty_out)` / `lob_best_ask(...)` | O(1) top of book, or `0` if that side is empty. |
 | `lob_depth(book, side, out[], max_levels)` | Snapshot of up to `max_levels` occupied price levels, best first. |
+| `lob_get_order(book, order_id, &side, &price, &qty)` | Read-only lookup of a resting order. |
+| `lob_level_orders(book, side, price_ticks, ids[], max_ids)` | Read-only list of the order ids at one price level, in FIFO order. |
 
 ## LOBSTER message replay
 
 [LOBSTER](https://lobsterdata.com/) message files have one row per
 order book event, with an event type column:
 
-| Type | Meaning | Planned mapping |
+| Type | Meaning | Mapping |
 |---|---|---|
 | 1 | New limit order submission | `lob_add_limit` |
 | 2 | Partial cancellation (order shrinks, stays in the book) | `lob_reduce` |
 | 3 | Deletion (full cancellation) | `lob_cancel` |
-| 4 | Execution of a visible limit order | consumed as part of the resting order's fill, via the fill callback during the aggressor's `lob_add_limit`/`lob_execute_market` |
-| 5 | Execution of a hidden limit order | same as type 4, but the resting order was never visible in `lob_depth` -- LOBSTER derives this from exchange hidden-liquidity fills, which this book doesn't model as a separate order type yet |
-| 7 | Trading halt | not a book mutation; replay should stop feeding messages and resume on the matching resume event |
+| 4 | Execution of a visible limit order | `lob_reduce` on the *resting* order, or `lob_cancel` if it's fully executed. The aggressor isn't in the message file, only the resting side of each execution, so this can't be replayed as a crossing `lob_add_limit` |
+| 5 | Execution of a hidden limit order | nothing: hidden liquidity never shows in the visible book |
+| 6 | Cross trade | nothing |
+| 7 | Trading halt / quote / resume | nothing: LOBSTER repeats the previous snapshot on these rows |
 
-This mapping is the plan for M2 (`tools/`, not built yet): replay a
-LOBSTER `message` file through the API above and diff `lob_depth()`
-after each line against LOBSTER's paired `orderbook` file.
+`tools/lobster_replay` (M2) replays a `message` file through the API
+above and checks `lob_depth()` after each line against LOBSTER's
+paired `orderbook` file. A level-N file only has messages for events
+inside the N visible levels, so orders resting before 9:30 or moving
+while deeper than level N are invisible to it; `tools/README.md`
+explains the narrow rule the replay uses to account for that without
+turning the check into "copy the snapshot".
 
 ## Milestones
 
@@ -113,7 +121,22 @@ after each line against LOBSTER's paired `orderbook` file.
   tested against a naive reference.
 - **M2 -- LOBSTER replay.** Reproduce LOBSTER's own `orderbook`
   snapshot files exactly, message by message, for at least one full
-  trading day of one symbol.
+  trading day of one symbol. *Done for the 2012-06-21 AAPL and MSFT
+  10-level samples* -- every row matches, under the revealed-level rule
+  in `tools/README.md`. AAPL also runs in CI (`lobster-replay` job):
+
+  | | AAPL | MSFT |
+  |---|---|---|
+  | rows | 400,391 | 668,765 |
+  | mismatched rows | **0** | **0** |
+  | lost shares | 0 | 0 |
+  | messages for ids never submitted in the file | 8,919 | 11,494 |
+  | revealed-level adjustments | 19,342 | 1,450 |
+  | messages that spilled past their own order | 367 | 3,595 |
+
+  The last three rows are the replay leaning on the snapshot file,
+  reported rather than hidden: liquidity that a 10-level file can't
+  show directly.
 - **M3 -- benchmark.** ns/message on a reproducible harness (not just
   `bench/bench.c`'s synthetic random flow -- real LOBSTER message
   flow), with p50/p99, not just a mean.
@@ -165,13 +188,17 @@ mean over synthetic traffic.
 ## Quick start
 
 ```sh
-make test    # build and run tests/unit_tests.c
-make asan    # same tests, rebuilt with -fsanitize=address,undefined
-make bench   # build and run bench/bench.c
+make test           # unit tests + replay fixtures
+make asan           # same tests, rebuilt with -fsanitize=address,undefined
+make bench          # build and run bench/bench.c
+make fetch-lobster  # download the AAPL LOBSTER sample into data/ (LOBSTER_TICKER=MSFT for MSFT)
+make replay         # replay it and check every row against the orderbook file
 make clean
 ```
 
-`CC` defaults to `cc`; override with `make CC=clang test`.
+`CC` defaults to `cc`; override with `make CC=clang test`. On Windows
+with MinGW-w64 (e.g. WinLibs), `mingw32-make CC=gcc test` works from a
+shell that has `sh` (Git Bash); `make asan` needs Linux or WSL.
 
 ## Repository guide
 
@@ -179,16 +206,17 @@ make clean
 |---|---|
 | `src/lob.h`, `src/lob.c` | The M1 core: book, matching, cancel/reduce, depth snapshot. |
 | `tests/unit_tests.c` | Assert-based tests, including the differential test against a naive reference over 100k random operations. |
+| `tests/fixtures/` | A hand-built two-level LOBSTER day for the replay harness, plus a corrupted copy it must reject. |
 | `bench/bench.c` | Synthetic-flow throughput benchmark, built but not a CI gate. |
-| `tools/` | Placeholder for the M2 LOBSTER replay harness. |
+| `tools/lobster_replay.c` | The M2 LOBSTER replay harness; `tools/README.md` has the message mapping and the reconciliation rule. |
 | `docs/DESIGN.md` | Memory layout diagram and the per-operation complexity table. |
 | `docs/EXCHANGE.md` | M5 spec: the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
-| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`asan`/`clean`. |
-| `.github/workflows/tests.yml` | gcc/clang matrix plus a separate ASan/UBSan job. |
+| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`asan`/`replay`/`fetch-lobster`/`clean`. |
+| `.github/workflows/tests.yml` | gcc/clang matrix, a separate ASan/UBSan job, and a job that replays the AAPL LOBSTER sample. |
 
 ## Notes
 
-- C11, POSIX `clock_gettime` in the benchmark only (not in the book
+- C11, POSIX `clock_gettime` in the benchmark and replay tool only (not in the book
   itself, which is plain C11 with no OS dependency).
 - The price window and order pool are both fixed at `lob_new()`; there
   is no rebasing or resizing yet. See `docs/DESIGN.md` for why that's
