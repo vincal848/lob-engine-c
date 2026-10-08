@@ -2,17 +2,17 @@
 
 [![tests](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml)
 
-**Status: Scaffold. M1 core done; M2 replay matches two full LOBSTER
-sample days exactly (see Milestones).**
+**Status: M1 core, M2 replay and M3 benchmark done. The replay matches
+two full LOBSTER sample days exactly, at a p50 of 50 ns and a p99 of
+251 ns per message (see Milestones).**
 
 A limit order book matching engine in C, meant as the fast core that
 [market-microstructure](https://github.com/vincal848/market-microstructure)
 (a Hawkes-driven LOB simulator with market makers, being scaffolded in
 parallel) can replay LOBSTER message data through.
 
-This repo is ideas plus a scaffold: a spec for where this is going,
-and a small, correct, tested core for where it is now -- not a full
-implementation.
+The book itself is done and checked against real exchange data; what's
+left is the M5 exchange layer on top of it, which so far is a spec.
 
 ## Motivation
 
@@ -115,7 +115,7 @@ turning the check into "copy the snapshot".
 
 ## Milestones
 
-- **M1 -- core book + unit tests.** *This scaffold.* `lob_add_limit`,
+- **M1 -- core book + unit tests.** *Done.* `lob_add_limit`,
   `lob_cancel`, `lob_reduce`, `lob_execute_market`, best bid/ask,
   depth snapshot, fill callback, all pool-backed, differentially
   tested against a naive reference.
@@ -139,7 +139,26 @@ turning the check into "copy the snapshot".
   show directly.
 - **M3 -- benchmark.** ns/message on a reproducible harness (not just
   `bench/bench.c`'s synthetic random flow -- real LOBSTER message
-  flow), with p50/p99, not just a mean.
+  flow), with p50/p99, not just a mean. *Done:* `lobster_replay -t`
+  (`make replay-bench`) times each message's book update on the AAPL
+  day, and `make alloc-test` proves the hot path never allocates.
+  Both run in CI.
+
+  | AAPL 2012-06-21, 389,059 type 1-4 messages | ns |
+  |---|---|
+  | mean | 81 |
+  | p50 | 50 |
+  | p90 | 151 |
+  | p99 | 251 |
+  | p99.9 | 2,694 |
+  | max | 76,614 |
+
+  GitHub Actions `ubuntu-latest`, gcc -O2, one run. A sample is one
+  message's `lob_*` calls plus the replay's own id lookup, not parsing
+  or the snapshot check, and includes about 21 ns of timer overhead.
+  The p99.9 and max are most likely the shared runner being
+  descheduled, not the book, which has no allocation or I/O to stall
+  on; a pinned core on a quiet machine is the way to tell.
 - **M4 -- Python binding.** `ctypes`/`cffi` binding so
   MarketMicrostructure can drive this book directly instead of
   reimplementing matching logic in Python.
@@ -164,9 +183,10 @@ price window:
 1000000 ops in 228.628 ms -> 228.6 ns/op
 ```
 
-One machine, indicative only (WSL Ubuntu, gcc -O2) -- not the M3
-benchmark, which needs real LOBSTER message flow and a p50/p99, not a
-mean over synthetic traffic.
+One machine, indicative only (WSL Ubuntu, gcc -O2). Synthetic random
+flow is much harder on the book than real flow (orders land anywhere
+in a 10,000-tick window, so market orders walk many levels); the M3
+numbers above are the ones to quote.
 
 ## Success metrics
 
@@ -179,20 +199,22 @@ mean over synthetic traffic.
   engine that's fast on average but has a long tail on, say, cancels
   that empty the best level (see `docs/DESIGN.md`'s complexity table)
   is not actually fast for a replay that cares about wall-clock time.
-- **Zero allocations on the hot path, verified, not assumed.** `make
-  asan` already catches memory bugs; M3 should also verify no
-  `malloc`/`free` calls happen between `lob_new()` and `lob_free()`
-  (e.g. an `LD_PRELOAD` allocation counter), not just rely on the code
-  review claim that it doesn't.
+- **Zero allocations on the hot path, verified, not assumed.**
+  `tests/alloc_test.c` wraps `malloc`/`calloc`/`realloc`/`free` at link
+  time (GNU ld `--wrap`) and fails if the book calls any of them
+  between `lob_new()` and `lob_free()` over 1M random operations. It
+  was checked by putting a `malloc` into `lob_cancel`, which it caught.
 
 ## Quick start
 
 ```sh
 make test           # unit tests + replay fixtures
 make asan           # same tests, rebuilt with -fsanitize=address,undefined
+make alloc-test     # fail if the book allocates between lob_new and lob_free (GNU ld)
 make bench          # build and run bench/bench.c
 make fetch-lobster  # download the AAPL LOBSTER sample into data/ (LOBSTER_TICKER=MSFT for MSFT)
 make replay         # replay it and check every row against the orderbook file
+make replay-bench   # same replay, with per-message latency percentiles
 make clean
 ```
 
@@ -206,13 +228,14 @@ shell that has `sh` (Git Bash); `make asan` needs Linux or WSL.
 |---|---|
 | `src/lob.h`, `src/lob.c` | The M1 core: book, matching, cancel/reduce, depth snapshot. |
 | `tests/unit_tests.c` | Assert-based tests, including the differential test against a naive reference over 100k random operations. |
+| `tests/alloc_test.c` | M3: link-time allocator wrap proving no `malloc`/`free` on the hot path. |
 | `tests/fixtures/` | A hand-built two-level LOBSTER day for the replay harness, plus a corrupted copy it must reject. |
 | `bench/bench.c` | Synthetic-flow throughput benchmark, built but not a CI gate. |
-| `tools/lobster_replay.c` | The M2 LOBSTER replay harness; `tools/README.md` has the message mapping and the reconciliation rule. |
+| `tools/lobster_replay.c` | The M2 LOBSTER replay harness (`-t` adds M3 latency); `tools/README.md` has the message mapping and the reconciliation rule. |
 | `docs/DESIGN.md` | Memory layout diagram and the per-operation complexity table. |
 | `docs/EXCHANGE.md` | M5 spec: the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
-| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`asan`/`replay`/`fetch-lobster`/`clean`. |
-| `.github/workflows/tests.yml` | gcc/clang matrix, a separate ASan/UBSan job, and a job that replays the AAPL LOBSTER sample. |
+| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`asan`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
+| `.github/workflows/tests.yml` | gcc/clang matrix (with the allocation test), a separate ASan/UBSan job, and a job that replays and times the AAPL LOBSTER sample. |
 
 ## Notes
 

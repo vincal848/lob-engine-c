@@ -9,8 +9,14 @@ against LOBSTER's paired `orderbook` file after every message.
 make fetch-lobster                    # AAPL, 10 levels, into data/ (gitignored)
 make replay                           # replay it
 make fetch-lobster replay LOBSTER_TICKER=MSFT
-./build/lobster_replay [-q] [-p max_orders] MESSAGE.csv ORDERBOOK.csv
+./build/lobster_replay [-q] [-t] [-p max_orders] MESSAGE.csv ORDERBOOK.csv
+make replay-bench                     # the replay with -t: per-message latency (M3)
 ```
+
+`-t` times each message's book update on its own (the `lob_*` calls
+the message turns into, not parsing or the snapshot check) and prints
+the mean, p50, p90, p99, p99.9 and max, plus the timer's own overhead,
+which is inside every sample.
 
 Exit status is 0 if every row matched, 1 if any row didn't (the first
 ten are printed to stderr), 2 on bad input. Prices are converted

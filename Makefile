@@ -4,7 +4,7 @@ CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 BUILD ?= build
 
-.PHONY: all test replay-test replay fetch-lobster bench asan clean
+.PHONY: all test replay-test replay replay-bench fetch-lobster bench alloc-test asan clean
 
 all: $(BUILD)/unit_tests $(BUILD)/bench $(BUILD)/lobster_replay
 
@@ -53,6 +53,19 @@ replay: $(BUILD)/lobster_replay
 
 bench: $(BUILD)/bench
 	./$(BUILD)/bench
+
+# M3: fails if lob.o calls the allocator between lob_new and lob_free.
+# Uses GNU ld's --wrap, so it lives outside `make test`.
+$(BUILD)/alloc_test: tests/alloc_test.c src/lob.h $(BUILD)/lob.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/alloc_test.c $(BUILD)/lob.o \
+	    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
+
+alloc-test: $(BUILD)/alloc_test
+	./$(BUILD)/alloc_test
+
+# M3 on real data: per-message book update latency over the LOBSTER day.
+replay-bench: $(BUILD)/lobster_replay
+	./$(BUILD)/lobster_replay -q -t $(LOBSTER_STEM)_message_$(LOBSTER_LEVELS).csv $(LOBSTER_STEM)_orderbook_$(LOBSTER_LEVELS).csv
 
 # Separate sanitizer pass: rebuilds into build-asan/ with
 # AddressSanitizer and UndefinedBehaviorSanitizer enabled and runs the
