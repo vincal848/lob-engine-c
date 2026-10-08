@@ -4,7 +4,7 @@ CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 BUILD ?= build
 
-.PHONY: all test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan clean
+.PHONY: all test exchange-test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan clean
 
 all: $(BUILD)/unit_tests $(BUILD)/bench $(BUILD)/lobster_replay
 
@@ -17,14 +17,25 @@ $(BUILD)/lob.o: src/lob.c src/lob.h | $(BUILD)
 $(BUILD)/unit_tests: tests/unit_tests.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/unit_tests.c $(BUILD)/lob.o
 
+# M5a: the exchange state machine, layered on the book.
+$(BUILD)/exchange.o: src/exchange.c src/exchange.h src/lob.h | $(BUILD)
+	$(CC) $(CFLAGS) -c -o $@ src/exchange.c
+
+$(BUILD)/exchange_tests: tests/exchange_tests.c tests/ex_random.h src/exchange.h src/lob.h $(BUILD)/exchange.o $(BUILD)/lob.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/exchange_tests.c $(BUILD)/exchange.o $(BUILD)/lob.o
+
+exchange-test: $(BUILD)/exchange_tests
+	./$(BUILD)/exchange_tests
+
 $(BUILD)/bench: bench/bench.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ bench/bench.c $(BUILD)/lob.o
 
 $(BUILD)/lobster_replay: tools/lobster_replay.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tools/lobster_replay.c $(BUILD)/lob.o
 
-test: $(BUILD)/unit_tests replay-test
+test: $(BUILD)/unit_tests $(BUILD)/exchange_tests replay-test
 	./$(BUILD)/unit_tests
+	./$(BUILD)/exchange_tests
 
 # The replay harness against a hand-built two-level day (see
 # tests/fixtures/README.md): the good file must match, and a copy with
@@ -60,8 +71,15 @@ $(BUILD)/alloc_test: tests/alloc_test.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/alloc_test.c $(BUILD)/lob.o \
 	    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
 
-alloc-test: $(BUILD)/alloc_test
+alloc-test: $(BUILD)/alloc_test $(BUILD)/alloc_exchange_test
 	./$(BUILD)/alloc_test
+	./$(BUILD)/alloc_exchange_test
+
+# M5a: the same check for ex_submit -- the exchange layer may allocate
+# in ex_new/ex_add_symbol, never while requests are processed.
+$(BUILD)/alloc_exchange_test: tests/alloc_exchange_test.c tests/ex_random.h src/exchange.h src/lob.h $(BUILD)/exchange.o $(BUILD)/lob.o | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/alloc_exchange_test.c $(BUILD)/exchange.o $(BUILD)/lob.o \
+	    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
 
 # M4: the shared library python/lob.py loads through ctypes.
 lib: $(BUILD)/liblob.so
