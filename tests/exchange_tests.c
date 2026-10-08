@@ -70,7 +70,8 @@ static void send(ex_t *ex, const ex_request_t *req)
 static uint64_t new_order(ex_t *ex, uint32_t acct, uint32_t sym, lob_side_t side,
                           ex_order_type_t type, int64_t price, uint32_t qty)
 {
-    ex_request_t req = {.seq = ++next_seq, .ts_ns = (int64_t)next_seq * 10,
+    ++next_seq; /* separate statement: initializer order is unsequenced */
+    ex_request_t req = {.seq = next_seq, .ts_ns = (int64_t)next_seq * 10,
                         .kind = EX_REQ_NEW, .account = acct, .symbol = sym, .side = side,
                         .type = type, .price_ticks = price, .qty = qty};
     send(ex, &req);
