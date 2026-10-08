@@ -17,6 +17,8 @@ jobs:
         run: make CC=${{ matrix.cc }} test
       - name: No allocation on the hot path
         run: make CC=${{ matrix.cc }} alloc-test
+      - name: Python binding
+        run: make CC=${{ matrix.cc }} python-test
 
   sanitize:
     runs-on: ubuntu-latest
