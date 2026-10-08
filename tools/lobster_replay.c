@@ -1,7 +1,11 @@
 /* lobster_replay -- M2: replay a LOBSTER message file through the book
  * and check it against LOBSTER's paired orderbook file, row by row.
  *
- *   lobster_replay [-q] [-p max_orders] MESSAGE.csv ORDERBOOK.csv
+ *   lobster_replay [-q] [-t] [-p max_orders] MESSAGE.csv ORDERBOOK.csv
+ *
+ * -t (M3) times each message's book update on its own -- the lob_*
+ * calls a message turns into, not parsing or the snapshot check --
+ * and prints p50/p90/p99/p99.9/max.
  *
  * Exit status: 0 if every row matched, 1 if any row mismatched or a
  * message referred to shares the book didn't have, 2 on bad input.
@@ -104,6 +108,19 @@ static double now_ns(void)
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec * 1e9 + (double)ts.tv_nsec;
+}
+
+static int cmp_double(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+    return (x > y) - (x < y);
+}
+
+/* Nearest-rank percentile of a sorted array. */
+static double pct(const double *sorted, size_t n, double p)
+{
+    size_t k = (size_t)(p / 100.0 * (double)n);
+    return sorted[k < n ? k : n - 1];
 }
 
 static void die(const char *what, const char *detail)
@@ -432,19 +449,21 @@ static int check_side(replay_t *r, lob_side_t side, const side_snapshot_t *snap,
 
 static void usage(void)
 {
-    fprintf(stderr, "usage: lobster_replay [-q] [-p max_orders] MESSAGE.csv ORDERBOOK.csv\n");
+    fprintf(stderr, "usage: lobster_replay [-q] [-t] [-p max_orders] MESSAGE.csv ORDERBOOK.csv\n");
     exit(2);
 }
 
 int main(int argc, char **argv)
 {
-    int quiet = 0;
+    int quiet = 0, timed = 0;
     unsigned long max_orders = 1UL << 20;
     int argi = 1;
 
     for (; argi < argc && argv[argi][0] == '-'; argi++) {
         if (strcmp(argv[argi], "-q") == 0) {
             quiet = 1;
+        } else if (strcmp(argv[argi], "-t") == 0) {
+            timed = 1;
         } else if (strcmp(argv[argi], "-p") == 0 && argi + 1 < argc) {
             max_orders = strtoul(argv[++argi], NULL, 10);
             if (max_orders == 0 || max_orders > UINT32_MAX - 1)
@@ -471,8 +490,9 @@ int main(int argc, char **argv)
 
     /* Pass 1: the price window, from every price either file mentions. */
     int64_t lo = INT64_MAX, hi = INT64_MIN;
-    size_t levels = 0;
+    size_t levels = 0, n_messages = 0;
     while (read_message(mf, line, &m)) {
+        n_messages++;
         if (m.type >= 1 && m.type <= 4) {
             if (m.price % LOBSTER_UNITS_PER_TICK)
                 die("sub-penny price on a visible-book message", NULL);
@@ -508,7 +528,9 @@ int main(int argc, char **argv)
     r.ids = malloc(r.ids_cap * sizeof(*r.ids));
     r.depth_cap = (size_t)(hi - lo) + 1;
     r.depth = malloc(r.depth_cap * sizeof(*r.depth));
-    if (!r.book || !r.ids || !r.depth)
+    double *lat = timed ? malloc(n_messages * sizeof(*lat)) : NULL;
+    size_t n_lat = 0;
+    if (!r.book || !r.ids || !r.depth || (timed && !lat))
         die("out of memory", NULL);
 
     /* Pass 2: the replay. */
@@ -528,8 +550,15 @@ int main(int argc, char **argv)
         r.st.by_type[m.type]++;
         if (r.st.rows == 1)
             seed(&r, snap, &m);
-        if (m.type <= 4)
-            apply_message(&r, &m);
+        if (m.type <= 4) {
+            if (timed) {
+                double t = now_ns();
+                apply_message(&r, &m);
+                lat[n_lat++] = now_ns() - t;
+            } else {
+                apply_message(&r, &m);
+            }
+        }
 
         int mismatch = 0;
         for (int s = 0; s < 2; s++)
@@ -574,9 +603,32 @@ int main(int argc, char **argv)
         printf("%s\n", ok ? "MATCH" : "MISMATCH");
     }
 
+    if (timed && n_lat > 0) {
+        /* The timer's own cost is inside every sample; report it so
+         * the numbers can be read against it rather than silently
+         * subtracting an estimate.
+         */
+        double overhead[1001];
+        for (size_t i = 0; i < 1001; i++) {
+            double t = now_ns();
+            overhead[i] = now_ns() - t;
+        }
+        qsort(overhead, 1001, sizeof(double), cmp_double);
+        qsort(lat, n_lat, sizeof(double), cmp_double);
+        double sum = 0;
+        for (size_t i = 0; i < n_lat; i++)
+            sum += lat[i];
+        printf("book update latency   %zu messages (types 1-4), ns per message\n", n_lat);
+        printf("  mean %.0f  p50 %.0f  p90 %.0f  p99 %.0f  p99.9 %.0f  max %.0f\n",
+               sum / (double)n_lat, pct(lat, n_lat, 50), pct(lat, n_lat, 90),
+               pct(lat, n_lat, 99), pct(lat, n_lat, 99.9), lat[n_lat - 1]);
+        printf("  timer overhead p50 %.0f ns (included in every sample above)\n", overhead[500]);
+    }
+
     lob_free(r.book);
     free(r.ids);
     free(r.depth);
+    free(lat);
     free(line);
     fclose(mf);
     fclose(of);
