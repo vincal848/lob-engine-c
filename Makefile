@@ -4,7 +4,7 @@ CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 BUILD ?= build
 
-.PHONY: all test exchange-test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan clean
+.PHONY: all test gateway-test tsan exchange-test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan clean
 
 all: $(BUILD)/unit_tests $(BUILD)/bench $(BUILD)/lobster_replay
 
@@ -27,15 +27,26 @@ $(BUILD)/exchange_tests: tests/exchange_tests.c tests/ex_random.h src/exchange.h
 exchange-test: $(BUILD)/exchange_tests
 	./$(BUILD)/exchange_tests
 
+# M5b: rings, sequencer thread, journal and fill tape. Needs pthreads.
+$(BUILD)/gateway.o: src/gateway.c src/gateway.h src/exchange.h src/lob.h | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -c -o $@ src/gateway.c
+
+$(BUILD)/gateway_tests: tests/gateway_tests.c tests/ex_random.h src/gateway.h src/exchange.h src/lob.h $(BUILD)/gateway.o $(BUILD)/exchange.o $(BUILD)/lob.o | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ tests/gateway_tests.c $(BUILD)/gateway.o $(BUILD)/exchange.o $(BUILD)/lob.o
+
+gateway-test: $(BUILD)/gateway_tests
+	./$(BUILD)/gateway_tests
+
 $(BUILD)/bench: bench/bench.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ bench/bench.c $(BUILD)/lob.o
 
 $(BUILD)/lobster_replay: tools/lobster_replay.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tools/lobster_replay.c $(BUILD)/lob.o
 
-test: $(BUILD)/unit_tests $(BUILD)/exchange_tests replay-test
+test: $(BUILD)/unit_tests $(BUILD)/exchange_tests $(BUILD)/gateway_tests replay-test
 	./$(BUILD)/unit_tests
 	./$(BUILD)/exchange_tests
+	./$(BUILD)/gateway_tests
 
 # The replay harness against a hand-built two-level day (see
 # tests/fixtures/README.md): the good file must match, and a copy with
@@ -102,5 +113,13 @@ asan:
 	    CFLAGS="-std=c11 -O0 -g -Wall -Wextra -Werror -pedantic -fsanitize=address,undefined" \
 	    test
 
+# ThreadSanitizer pass for the gateway: rebuilds into build-tsan/ and runs
+# only the gateway tests (the rest of the suite is single-threaded).
+# TSan and ASan cannot be combined, hence a separate target.
+tsan:
+	$(MAKE) CC=$(CC) BUILD=build-tsan \
+	    CFLAGS="-std=c11 -O1 -g -Wall -Wextra -Werror -pedantic -fsanitize=thread" \
+	    gateway-test
+
 clean:
-	rm -rf build build-asan
+	rm -rf build build-asan build-tsan
