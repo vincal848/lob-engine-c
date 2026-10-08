@@ -1,6 +1,6 @@
 # M5 spec: exchange layer
 
-**Status: M5a (the state machine) and M5b (gateway) are built; M5c (benchmark) is still spec.**
+**Status: M5a (the state machine) and M5b (gateway) and M5c (benchmark) are built; this document is the spec they were built from.**
 
 This is the plan for an exchange emulator on top of the M1 book: many
 symbols, participants with cash and positions, concurrent order entry
@@ -290,7 +290,20 @@ stress demo, reporting what the README's success metrics ask for:
 - N producer threads x M symbols x K accounts, configurable
 - end-to-end latency from submit to ack: **p50 / p99 / max**, not a mean
 - sustained throughput (requests/s) through the sequencer
-- the allocation-counter check from M3, extended to cover `ex_submit`
+- the allocation-counter check from M3, extended to cover `ex_submit` and then the whole gateway hot path
+
+### As built (M5c)
+
+`bench/exchange_bench.c` is as specified; the results table is in the
+README. Choices worth knowing: each producer keeps a window of requests
+in flight (default 8) so throughput is not just round-trip time, and
+latency is timestamped by the producer around `gw_submit` and on the
+ACK/REJECT it reads back (only its own requests are ACKed on its ring,
+in submit order). The allocation check is `tests/alloc_gateway_test.c`;
+it wraps `aligned_alloc` as well, because the rings use it, and counts
+calls from the gateway, exchange, book and test code, not libc-internal
+ones (thread creation).
+
 
 ## Milestone breakdown
 
@@ -323,8 +336,20 @@ stress demo, reporting what the README's success metrics ask for:
   if it shows up in p99, a collar (convert to IOC at best ask + N
   ticks) is the cheaper alternative, at the cost of sometimes not
   filling everything that was affordable.
+  *M5c: not needed.* With one request in flight the p99 is about 2.1-2.5 us
+  whether 10% or 40% of the flow is market orders (three runs each
+  on one machine), so the walk does not show up at the depths and
+  quantities (up to 10) this flow produces. At higher load the p99
+  is dominated by queueing and OS scheduling, which the benchmark does not
+  separate from the walk, but nothing suggests the collar is worth its
+  semantics change.
 - **One sequencer vs one per symbol group.** A single sequencer gives
   one global order of events, which is what makes the replay test
   simple. Sharding by symbol would scale better but needs a
   cross-shard story for accounts. Not before M5c's numbers say it's
-  needed.
+  needed. *M5c: not needed yet, but not settled either.* One sequencer
+  sustained about 1.6-2.2M requests/s (journal and tape included) on the
+  development machine, and throughput was roughly flat (1.6M to 2.0M) from one producer
+  with a window of 8 up to four, so the sequencer is the bottleneck and
+  that is its ceiling there. Whether sharding would raise it was not
+  measured.

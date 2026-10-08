@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml)
 
-**Status: M1 core, M2 replay, M3 benchmark, M4 Python binding, M5a exchange state machine and M5b gateway done. The replay matches
+**Status: M1 core, M2 replay, M3 benchmark, M4 Python binding, M5 exchange layer (state machine, gateway, benchmark) done. The replay matches
 two full LOBSTER sample days exactly, at a p50 of 50 ns and a p99 of
 251 ns per message (see Milestones).**
 
@@ -12,7 +12,7 @@ A limit order book matching engine in C, meant as the fast core that
 parallel) can replay LOBSTER message data through.
 
 The book itself is done and checked against real exchange data; what's
-left is the last piece of the M5 exchange layer: the state machine (M5a) and the threaded gateway (M5b) are built, the benchmark (M5c) is still spec.
+left is nothing in the plan: the M5 exchange layer (state machine, threaded gateway, benchmark) is built.
 
 ## Motivation
 
@@ -178,7 +178,44 @@ turning the check into "copy the snapshot".
   in CI. Each call crosses the ctypes boundary, so drive the book in
   batches from C (or replay with `lobster_replay`) where speed
   matters; the binding is for simulators and notebooks.
-- **M5 -- exchange layer.** *M5a (the single-threaded state machine) and M5b (the gateway) done; M5c (benchmark) still to do: [`docs/EXCHANGE.md`](docs/EXCHANGE.md).* M5a is `src/exchange.{h,c}`: symbols, exchange-assigned order ids, accounts with reservations and pre-trade risk, IOC, exact market-buy pricing, fill attribution and an event stream, checked by conservation invariants and a differential test against a naive exchange, and `ex_submit` is verified allocation-free. M5b is `src/gateway.{h,c}`: a lock-free SPSC ring per producer each way, one sequencer thread that stamps seq and timestamp, journals every request and writes the fill tape, and a determinism test that replays the journal of a concurrent run single-threaded and requires a byte-identical tape; it also runs under ThreadSanitizer in CI.
+- **M5 -- exchange layer.** *M5a (the single-threaded state machine), M5b (the gateway) and M5c (the benchmark) done: [`docs/EXCHANGE.md`](docs/EXCHANGE.md).* M5a is `src/exchange.{h,c}`: symbols, exchange-assigned order ids, accounts with reservations and pre-trade risk, IOC, exact market-buy pricing, fill attribution and an event stream, checked by conservation invariants and a differential test against a naive exchange, and `ex_submit` is verified allocation-free. M5b is `src/gateway.{h,c}`: a lock-free SPSC ring per producer each way, one sequencer thread that stamps seq and timestamp, journals every request and writes the fill tape, and a determinism test that replays the journal of a concurrent run single-threaded and requires a byte-identical tape; it also runs under ThreadSanitizer in CI.
+
+  M5c is `bench/exchange_bench.c` (`make exchange-bench`, options such
+  as `BENCH_ARGS="-p 4 -w 8"`): N producer threads x M symbols x K
+  accounts, each keeping `-w` requests in flight and timestamping around
+  `gw_submit` and on the ACK/REJECT coming back, so a sample is submit
+  -> ring -> sequencer -> `ex_submit` -> ring -> producer. `make
+  alloc-test` also covers the whole gateway hot path: nothing between
+  `gw_new` and `gw_stop` calls the allocator over 100k requests from two
+  producers (checked by putting a `malloc` into the sequencer loop, which
+  it caught).
+
+  | producers | window | requests/s | p50 ns | p99 ns (3 runs) | max ns |
+  |---|---|---|---|---|---|
+  | 1 | 1 | 974,804 | 668 | 2,345-2,487 | 233,507 |
+  | 1 (40% market orders) | 1 | 1,224,903 | 601 | 2,098-2,463 | 275,623 |
+  | 1 | 8 | 1,631,270 | 2,962 | 9,293-22,605 | 7,674,554 |
+  | 2 | 8 | 2,027,091 | 6,711 | 18,181-33,046 | 1,857,998 |
+  | 4 | 8 | 1,908,283 | 14,430 | 34,409-52,954 | 2,069,479 |
+  | 4 (40% market orders) | 8 | 2,079,051 | 13,721 | 34,804-42,423 | 468,392 |
+
+  Each row is the median-throughput run of three (`-n 200000` requests
+  per producer, seeds 1-3, 8 symbols, 64 accounts, 10% market orders
+  unless noted); throughput, p50 and max are from that run, the p99
+  column is the range over all three. The first 5% of each producer's
+  samples are dropped as warm-up. Intel i7-12700F (20 logical CPUs),
+  WSL2 Ubuntu 24.04, kernel 6.18, gcc 13.3 -O2, nothing pinned. Under 4%
+  of requests are rejected (cancels of an order that filled in the
+  meantime, plus a few capacity rejects) and no event or fill was
+  dropped. Caveats: one machine, one flow shape, spinning threads on a
+  shared virtualized host, so the max is mostly the OS descheduling a
+  thread and throughput and p99 move a lot between runs (one run in three
+  was far off the others). With more than one request in flight the
+  latency is queueing time in front of the one sequencer (p50 is roughly
+  producers x window / throughput), not the cost of one request; the
+  window-1 rows (about 0.6-0.7 us p50, 2.1-2.5 us p99) are the cost of
+  the path with no queue.
+
   Many symbols (one book each), accounts with cash and positions and
   a pre-trade risk check, multi-threaded order entry through lock-free
   rings into a single sequencer thread, and a fill tape. Done when a
@@ -230,6 +267,7 @@ make alloc-test     # fail if the book or ex_submit allocates after setup (GNU l
 make exchange-test  # just the M5a exchange tests (also part of make test)
 make tsan           # the M5b gateway tests under ThreadSanitizer (Linux or WSL)
 make gateway-test   # just the M5b gateway tests (also part of make test)
+make exchange-bench  # M5c: latency/throughput through the gateway (BENCH_ARGS="-p 4")
 make bench          # build and run bench/bench.c
 make fetch-lobster  # download the AAPL LOBSTER sample into data/ (LOBSTER_TICKER=MSFT for MSFT)
 make replay         # replay it and check every row against the orderbook file
@@ -254,13 +292,15 @@ shell that has `sh` (Git Bash); `make asan` needs Linux or WSL.
 | `tests/alloc_exchange_test.c` | M5a: the allocator wrap over 1M `ex_submit` calls. |
 | `src/gateway.h`, `src/gateway.c` | M5b: SPSC rings, the sequencer thread, journal, fill tape and single-threaded replay. |
 | `tests/gateway_tests.c` | M5b: ring unit tests and the determinism test (concurrent producers, replay, `memcmp` of the tapes). |
+| `tests/alloc_gateway_test.c` | M5c: the allocator wrap across the whole gateway hot path, `gw_new` to `gw_stop`. |
 | `tests/fixtures/` | A hand-built two-level LOBSTER day for the replay harness, plus a corrupted copy it must reject. |
 | `bench/bench.c` | Synthetic-flow throughput benchmark, built but not a CI gate. |
+| `bench/exchange_bench.c` | M5c: producers x symbols x accounts, submit-to-ACK p50/p99/max and requests/s through the gateway; built in CI, not gated. |
 | `tools/lobster_replay.c` | The M2 LOBSTER replay harness (`-t` adds M3 latency); `tools/README.md` has the message mapping and the reconciliation rule. |
 | `python/lob.py`, `python/test_lob.py` | M4: the ctypes binding and its tests. |
 | `docs/DESIGN.md` | Memory layout diagram and the per-operation complexity table. |
 | `docs/EXCHANGE.md` | M5 spec (M5a and M5b built; "As built" lists deviations): the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
-| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`exchange-test`/`lib`/`python-test`/`asan`/`tsan`/`gateway-test`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
+| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`exchange-test`/`lib`/`python-test`/`asan`/`tsan`/`gateway-test`/`exchange-bench`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
 | `.github/workflows/tests.yml` | gcc/clang matrix (with the allocation test), a separate ASan/UBSan job, and a job that replays and times the AAPL LOBSTER sample. |
 
 ## Notes

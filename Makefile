@@ -4,9 +4,9 @@ CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 BUILD ?= build
 
-.PHONY: all test gateway-test tsan exchange-test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan clean
+.PHONY: all test gateway-test tsan exchange-test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan exchange-bench clean
 
-all: $(BUILD)/unit_tests $(BUILD)/bench $(BUILD)/lobster_replay
+all: $(BUILD)/unit_tests $(BUILD)/bench $(BUILD)/lobster_replay $(BUILD)/exchange_bench
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -39,6 +39,14 @@ gateway-test: $(BUILD)/gateway_tests
 
 $(BUILD)/bench: bench/bench.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ bench/bench.c $(BUILD)/lob.o
+
+# M5c: end-to-end latency and throughput through the gateway. Printed, not
+# gated. BENCH_ARGS passes options through, e.g. make exchange-bench BENCH_ARGS="-p 4".
+$(BUILD)/exchange_bench: bench/exchange_bench.c tests/ex_random.h src/gateway.h src/exchange.h src/lob.h $(BUILD)/gateway.o $(BUILD)/exchange.o $(BUILD)/lob.o | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ bench/exchange_bench.c $(BUILD)/gateway.o $(BUILD)/exchange.o $(BUILD)/lob.o
+
+exchange-bench: $(BUILD)/exchange_bench
+	./$(BUILD)/exchange_bench $(BENCH_ARGS)
 
 $(BUILD)/lobster_replay: tools/lobster_replay.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tools/lobster_replay.c $(BUILD)/lob.o
@@ -82,15 +90,22 @@ $(BUILD)/alloc_test: tests/alloc_test.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/alloc_test.c $(BUILD)/lob.o \
 	    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
 
-alloc-test: $(BUILD)/alloc_test $(BUILD)/alloc_exchange_test
+alloc-test: $(BUILD)/alloc_test $(BUILD)/alloc_exchange_test $(BUILD)/alloc_gateway_test
 	./$(BUILD)/alloc_test
 	./$(BUILD)/alloc_exchange_test
+	./$(BUILD)/alloc_gateway_test
 
 # M5a: the same check for ex_submit -- the exchange layer may allocate
 # in ex_new/ex_add_symbol, never while requests are processed.
 $(BUILD)/alloc_exchange_test: tests/alloc_exchange_test.c tests/ex_random.h src/exchange.h src/lob.h $(BUILD)/exchange.o $(BUILD)/lob.o | $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/alloc_exchange_test.c $(BUILD)/exchange.o $(BUILD)/lob.o \
 	    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free
+
+# M5c: the same check across the whole gateway hot path (rings, sequencer,
+# journal, tape, ex_submit) between gw_new and gw_stop.
+$(BUILD)/alloc_gateway_test: tests/alloc_gateway_test.c tests/ex_random.h src/gateway.h src/exchange.h src/lob.h $(BUILD)/gateway.o $(BUILD)/exchange.o $(BUILD)/lob.o | $(BUILD)
+	$(CC) $(CFLAGS) -pthread -o $@ tests/alloc_gateway_test.c $(BUILD)/gateway.o $(BUILD)/exchange.o $(BUILD)/lob.o \
+	    -Wl,--wrap=malloc,--wrap=calloc,--wrap=realloc,--wrap=free,--wrap=aligned_alloc
 
 # M4: the shared library python/lob.py loads through ctypes.
 lib: $(BUILD)/liblob.so
