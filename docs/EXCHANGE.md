@@ -1,6 +1,6 @@
 # M5 spec: exchange layer
 
-**Status: spec only. Nothing in this document is built yet.**
+**Status: M5a (the state machine) is built; M5b (gateway) and M5c (benchmark) are still spec.**
 
 This is the plan for an exchange emulator on top of the M1 book: many
 symbols, participants with cash and positions, concurrent order entry
@@ -105,6 +105,42 @@ void  ex_submit(ex_t *ex, const ex_request_t *req);
 `ex_event_t` is a tagged union of `ACK`, `REJECT` (with a reason code),
 `FILL` (one per side per fill), and `DONE` (the order is fully filled
 or cancelled and its id is retired).
+
+### As built (M5a deviations from the sketch)
+
+`src/exchange.h` is the authority on the API; where it differs from the
+sketch above:
+
+- **`ex_config_t`** carries `max_symbols`, `max_accounts`, `max_orders`
+  (open orders overall), `book_orders` (each symbol's `lob_t` pool) and
+  `max_window_ticks`. The last sizes the market-buy walk buffer to the
+  widest window any symbol may have, so the walk can never run out of
+  room and the cost stays exact; `ex_add_symbol` refuses a wider window.
+- **`ex_add_symbol` allocates**, because `lob_new` does. `ex_new`
+  allocates all the exchange's own state, `ex_submit` allocates nothing
+  (`tests/alloc_exchange_test.c`). Symbols and accounts are setup-time:
+  both are refused after the first `ex_submit`, and accounts are added
+  after the symbols their position arrays index.
+- **`ex_event_t` is one flat struct** with a `kind` tag, not a C union;
+  the header says which fields each kind sets. `FILL` also carries
+  `exec_id` (shared by the buyer's and seller's events),
+  `counter_order_id` and `is_aggressor`; `DONE.qty` is the unfilled
+  quantity (0 when fully filled).
+- **Market orders get an id and a record too.** The id is only for the
+  ACK/DONE events; fills still reach the aggressor through the "current
+  aggressor" field because `lob.h` reports id 0. A market order reserves
+  nothing, since it executes inside the request (the buy is checked
+  against the exact walk cost, the sell against available position).
+- **Capacity rejects.** `EX_REJ_CAPACITY` covers a full order-record
+  table and a limit order when its symbol already has `book_orders` open
+  orders (conservative: it keeps `lob_add_limit` from failing after it has
+  already filled something). IOC and market orders need only a record.
+- **Read-only accessors** (`ex_get_balance`, `ex_get_position`,
+  `ex_get_order`, `ex_book`, `ex_symbol_index`) exist for tests and
+  tooling. `lob.h` is unchanged.
+- `symbol` in a CANCEL/REDUCE request is ignored (the order knows its
+  symbol). Symbol windows must start at tick 0 or above so cash arithmetic
+  stays non-negative.
 
 ### Symbols
 

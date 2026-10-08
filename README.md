@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml)
 
-**Status: M1 core, M2 replay, M3 benchmark and M4 Python binding done. The replay matches
+**Status: M1 core, M2 replay, M3 benchmark, M4 Python binding and M5a exchange state machine done. The replay matches
 two full LOBSTER sample days exactly, at a p50 of 50 ns and a p99 of
 251 ns per message (see Milestones).**
 
@@ -12,7 +12,7 @@ A limit order book matching engine in C, meant as the fast core that
 parallel) can replay LOBSTER message data through.
 
 The book itself is done and checked against real exchange data; what's
-left is the M5 exchange layer on top of it, which so far is a spec.
+left is the rest of the M5 exchange layer: the state machine (M5a) is built, the threaded gateway and benchmark are still spec.
 
 ## Motivation
 
@@ -178,7 +178,7 @@ turning the check into "copy the snapshot".
   in CI. Each call crosses the ctypes boundary, so drive the book in
   batches from C (or replay with `lobster_replay`) where speed
   matters; the binding is for simulators and notebooks.
-- **M5 -- exchange layer.** *Spec only: [`docs/EXCHANGE.md`](docs/EXCHANGE.md).*
+- **M5 -- exchange layer.** *M5a (the single-threaded state machine) done; M5b (gateway, rings, journal) and M5c (benchmark) still to do: [`docs/EXCHANGE.md`](docs/EXCHANGE.md).* M5a is `src/exchange.{h,c}`: symbols, exchange-assigned order ids, accounts with reservations and pre-trade risk, IOC, exact market-buy pricing, fill attribution and an event stream, checked by conservation invariants and a differential test against a naive exchange, and `ex_submit` is verified allocation-free.
   Many symbols (one book each), accounts with cash and positions and
   a pre-trade risk check, multi-threaded order entry through lock-free
   rings into a single sequencer thread, and a fill tape. Done when a
@@ -226,7 +226,8 @@ numbers above are the ones to quote.
 ```sh
 make test           # unit tests + replay fixtures
 make asan           # same tests, rebuilt with -fsanitize=address,undefined
-make alloc-test     # fail if the book allocates between lob_new and lob_free (GNU ld)
+make alloc-test     # fail if the book or ex_submit allocates after setup (GNU ld)
+make exchange-test  # just the M5a exchange tests (also part of make test)
 make bench          # build and run bench/bench.c
 make fetch-lobster  # download the AAPL LOBSTER sample into data/ (LOBSTER_TICKER=MSFT for MSFT)
 make replay         # replay it and check every row against the orderbook file
@@ -246,13 +247,16 @@ shell that has `sh` (Git Bash); `make asan` needs Linux or WSL.
 | `src/lob.h`, `src/lob.c` | The M1 core: book, matching, cancel/reduce, depth snapshot. |
 | `tests/unit_tests.c` | Assert-based tests, including the differential test against a naive reference over 100k random operations. |
 | `tests/alloc_test.c` | M3: link-time allocator wrap proving no `malloc`/`free` on the hot path. |
+| `src/exchange.h`, `src/exchange.c` | M5a: the exchange state machine (symbols, accounts, risk, IOC, events) on top of the book. |
+| `tests/exchange_tests.c`, `tests/ex_random.h` | M5a unit tests, conservation invariants and the differential test against a naive exchange; the seeded request generator is shared. |
+| `tests/alloc_exchange_test.c` | M5a: the allocator wrap over 1M `ex_submit` calls. |
 | `tests/fixtures/` | A hand-built two-level LOBSTER day for the replay harness, plus a corrupted copy it must reject. |
 | `bench/bench.c` | Synthetic-flow throughput benchmark, built but not a CI gate. |
 | `tools/lobster_replay.c` | The M2 LOBSTER replay harness (`-t` adds M3 latency); `tools/README.md` has the message mapping and the reconciliation rule. |
 | `python/lob.py`, `python/test_lob.py` | M4: the ctypes binding and its tests. |
 | `docs/DESIGN.md` | Memory layout diagram and the per-operation complexity table. |
-| `docs/EXCHANGE.md` | M5 spec: the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
-| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`lib`/`python-test`/`asan`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
+| `docs/EXCHANGE.md` | M5 spec (M5a built; "As built" lists deviations): the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
+| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`exchange-test`/`lib`/`python-test`/`asan`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
 | `.github/workflows/tests.yml` | gcc/clang matrix (with the allocation test), a separate ASan/UBSan job, and a job that replays and times the AAPL LOBSTER sample. |
 
 ## Notes
