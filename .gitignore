@@ -1,5 +1,6 @@
 build/
 build-asan/
+build-tsan/
 *.o
 a.out
 data/
