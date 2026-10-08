@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml/badge.svg)](https://github.com/vincal848/lob-engine-c/actions/workflows/tests.yml)
 
-**Status: M1 core, M2 replay and M3 benchmark done. The replay matches
+**Status: M1 core, M2 replay, M3 benchmark and M4 Python binding done. The replay matches
 two full LOBSTER sample days exactly, at a p50 of 50 ns and a p99 of
 251 ns per message (see Milestones).**
 
@@ -161,7 +161,23 @@ turning the check into "copy the snapshot".
   on; a pinned core on a quiet machine is the way to tell.
 - **M4 -- Python binding.** `ctypes`/`cffi` binding so
   MarketMicrostructure can drive this book directly instead of
-  reimplementing matching logic in Python.
+  reimplementing matching logic in Python. *Done:* `python/lob.py`,
+  standard library only:
+
+  ```python
+  from lob import Book, BUY, SELL    # after `make lib`
+  with Book(max_orders=10_000, min_tick=57_000, max_tick=59_000) as book:
+      book.on_fill(print)             # Fill(resting_order_id, aggressor_order_id, ...)
+      book.add_limit(1, SELL, 58_001, 5)
+      book.add_limit(2, BUY, 58_001, 3)   # returns 3: crossed
+      book.best_ask()                      # (58001, 2)
+  ```
+
+  Every `lob.h` call is wrapped; a non-OK status raises `LobError`
+  with the status name. `make python-test` runs `python/test_lob.py`
+  in CI. Each call crosses the ctypes boundary, so drive the book in
+  batches from C (or replay with `lobster_replay`) where speed
+  matters; the binding is for simulators and notebooks.
 - **M5 -- exchange layer.** *Spec only: [`docs/EXCHANGE.md`](docs/EXCHANGE.md).*
   Many symbols (one book each), accounts with cash and positions and
   a pre-trade risk check, multi-threaded order entry through lock-free
@@ -215,6 +231,7 @@ make bench          # build and run bench/bench.c
 make fetch-lobster  # download the AAPL LOBSTER sample into data/ (LOBSTER_TICKER=MSFT for MSFT)
 make replay         # replay it and check every row against the orderbook file
 make replay-bench   # same replay, with per-message latency percentiles
+make python-test    # build build/liblob.so and run the Python binding tests
 make clean
 ```
 
@@ -232,9 +249,10 @@ shell that has `sh` (Git Bash); `make asan` needs Linux or WSL.
 | `tests/fixtures/` | A hand-built two-level LOBSTER day for the replay harness, plus a corrupted copy it must reject. |
 | `bench/bench.c` | Synthetic-flow throughput benchmark, built but not a CI gate. |
 | `tools/lobster_replay.c` | The M2 LOBSTER replay harness (`-t` adds M3 latency); `tools/README.md` has the message mapping and the reconciliation rule. |
+| `python/lob.py`, `python/test_lob.py` | M4: the ctypes binding and its tests. |
 | `docs/DESIGN.md` | Memory layout diagram and the per-operation complexity table. |
 | `docs/EXCHANGE.md` | M5 spec: the exchange layer (symbols, accounts, risk, sequencer, fill tape) on top of the book. |
-| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`asan`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
+| `Makefile` | `CC ?= cc`, `-std=c11 -O2 -Wall -Wextra -Werror -pedantic`, `all`/`test`/`bench`/`alloc-test`/`lib`/`python-test`/`asan`/`replay`/`replay-bench`/`fetch-lobster`/`clean`. |
 | `.github/workflows/tests.yml` | gcc/clang matrix (with the allocation test), a separate ASan/UBSan job, and a job that replays and times the AAPL LOBSTER sample. |
 
 ## Notes

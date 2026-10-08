@@ -3,3 +3,4 @@ build-asan/
 *.o
 a.out
 data/
+__pycache__/

@@ -4,7 +4,7 @@ CC ?= cc
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 BUILD ?= build
 
-.PHONY: all test replay-test replay replay-bench fetch-lobster bench alloc-test asan clean
+.PHONY: all test replay-test replay replay-bench fetch-lobster bench alloc-test lib python-test asan clean
 
 all: $(BUILD)/unit_tests $(BUILD)/bench $(BUILD)/lobster_replay
 
@@ -62,6 +62,15 @@ $(BUILD)/alloc_test: tests/alloc_test.c src/lob.h $(BUILD)/lob.o | $(BUILD)
 
 alloc-test: $(BUILD)/alloc_test
 	./$(BUILD)/alloc_test
+
+# M4: the shared library python/lob.py loads through ctypes.
+lib: $(BUILD)/liblob.so
+
+$(BUILD)/liblob.so: src/lob.c src/lob.h | $(BUILD)
+	$(CC) $(CFLAGS) -fPIC -shared -o $@ src/lob.c
+
+python-test: $(BUILD)/liblob.so
+	cd python && LOB_LIB=../$(BUILD)/liblob.so python3 test_lob.py
 
 # M3 on real data: per-message book update latency over the LOBSTER day.
 replay-bench: $(BUILD)/lobster_replay
