@@ -1,6 +1,6 @@
 # M5 spec: exchange layer
 
-**Status: M5a (the state machine) is built; M5b (gateway) and M5c (benchmark) are still spec.**
+**Status: M5a (the state machine) and M5b (gateway) are built; M5c (benchmark) is still spec.**
 
 This is the plan for an exchange emulator on top of the M1 book: many
 symbols, participants with cash and positions, concurrent order entry
@@ -235,6 +235,27 @@ the two calls -- another thing the single-threaded sequencer buys.
   reproduces it exactly).
 - **Backpressure.** A full inbound ring makes that producer spin or
   get `EX_ERR_BUSY`; the sequencer never blocks and never drops.
+
+### As built (M5b deviations from the Gateway section)
+
+`src/gateway.h` is the authority on the API; where it differs from the spec:
+
+- **The journal is in memory only** (preallocated, `max_requests` records of
+  stamped `ex_request_t`); a file journal was not needed by the replay test.
+- **The sequencer drops an event** whose outbound ring is full, and counts it
+  (`gw_stats_t`), because it must never block; producers have to drain.
+  Inbound requests are never dropped. A full journal or tape is likewise
+  counted/flagged instead of blocking: at journal capacity the sequencer stops
+  consuming, so producers see `GW_BUSY`.
+- **Backpressure is `GW_BUSY`** from `gw_submit()`; the caller decides whether
+  to spin. There is no `EX_ERR_BUSY`, to keep `exchange.h` untouched.
+- **Events route to outbound ring `account % producers`**, so a fill's
+  counterparty hears about it on its own producer's ring.
+- **Replay is `gw_replay()`**, which shares the tape-building code with the
+  live sequencer, so the test compares the threaded run and the replay of its
+  journal rather than two implementations.
+- `make tsan` runs only the gateway tests; CI turns ASLR off for it
+  (`setarch -R`) because TSan aborts on some kernels' address layouts.
 
 ## Tests
 

@@ -27,6 +27,15 @@ jobs:
       - name: Test with ASan/UBSan
         run: make asan
 
+  # M5b: the gateway threads under ThreadSanitizer. ASLR is turned off
+  # because TSan aborts on some kernels' high-entropy address layouts.
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Gateway tests with TSan
+        run: setarch "$(uname -m)" -R make tsan
+
   # M2 on a real trading day. The sample is fetched from LOBSTER at
   # run time rather than committed; a download failure fails the job
   # rather than skipping it.
