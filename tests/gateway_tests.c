@@ -103,7 +103,7 @@ static gw_t *gw;
 
 typedef struct {
     uint32_t id;
-    uint64_t rng;       /* splitmix64 state; rand() is shared between threads */
+    uint64_t rng;       /* ex_splitmix state; rand() is shared between threads */
     uint64_t live[H_MAX_ORDERS * 2]; /* ids this producer has seen ACKed and not DONE */
     size_t nlive;
     unsigned long busy; /* times the inbound ring was full */
@@ -112,10 +112,7 @@ typedef struct {
 
 static uint64_t rnd(producer_t *p)
 {
-    uint64_t z = (p->rng += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
+    return ex_splitmix(&p->rng);
 }
 
 static void absorb(producer_t *p, const ex_event_t *ev)
